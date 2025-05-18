@@ -86,24 +86,37 @@ func roundUpPowerOfTwo(n uint32) (uint32, bool) {
 	return result, true
 }
 
-// New creates a new iouring fd.
+// New 函数用于创建一个新的 io_uring 文件描述符。
+// 该函数负责初始化 io_uring 的提交队列（SQ）和完成队列（CQ），并分配所需的内存。
+//
+// 参数:
+//   - ctx: 上下文对象，用于传递请求的上下文信息。
+//   - vfsObj: 虚拟文件系统对象，用于创建匿名虚拟目录项。
+//   - entries: 提交队列的初始大小，不能超过 linux.IORING_MAX_ENTRIES。
+//   - params: io_uring 的初始化参数，包含队列大小、标志位等信息。
+//
+// 返回值:
+//   - *vfs.FileDescription: 成功时返回新创建的 io_uring 文件描述符。
+//   - error: 失败时返回相应的错误信息。
 func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, entries uint32, params *linux.IOUringParams) (*vfs.FileDescription, error) {
+	// 检查提交队列大小是否超过最大限制
 	if entries > linux.IORING_MAX_ENTRIES {
 		return nil, linuxerr.EINVAL
 	}
-
+	// 创建一个匿名虚拟目录项，用于 io_uring 文件描述符
 	vd := vfsObj.NewAnonVirtualDentry("[io_uring]")
 	defer vd.DecRef(ctx)
-
+	// 从上下文中获取内存文件对象，用于后续内存分配
 	mf := pgalloc.MemoryFileFromContext(ctx)
 	if mf == nil {
 		panic(fmt.Sprintf("context.Context %T lacks non-nil value for key %T", ctx, pgalloc.CtxMemoryFile))
 	}
-
+	// 将提交队列大小向上取整为 2 的幂次方
 	numSqEntries, ok := roundUpPowerOfTwo(entries)
 	if !ok {
 		return nil, linuxerr.EOVERFLOW
 	}
+	// 根据参数设置完成队列大小
 	var numCqEntries uint32
 	if params.Flags&linux.IORING_SETUP_CQSIZE != 0 {
 		var ok bool
@@ -115,28 +128,29 @@ func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, entries uint32, par
 		numCqEntries = 2 * numSqEntries
 	}
 
-	// Allocate enough space to store the `struct io_rings` plus a given number of indexes
-	// corresponding to the number of SQEs.
+	// 计算 io_rings 结构体及其相关索引所需的内存大小
 	ioRingsWithCqesSize := uint32((*linux.IORings)(nil).SizeBytes()) +
 		numCqEntries*uint32((*linux.IOUringCqe)(nil).SizeBytes())
 	ringsBufferSize := uint64(ioRingsWithCqesSize +
 		numSqEntries*uint32((*linux.IORingIndex)(nil).SizeBytes()))
 	ringsBufferSize = uint64(hostarch.Addr(ringsBufferSize).MustRoundUp())
 
+	// 分配内存用于存储 io_rings 结构体及其相关索引
 	memCgID := pgalloc.MemoryCgroupIDFromContext(ctx)
 	rbfr, err := mf.Allocate(ringsBufferSize, pgalloc.AllocOpts{Kind: usage.Anonymous, MemCgID: memCgID})
 	if err != nil {
 		return nil, linuxerr.ENOMEM
 	}
 
-	// Allocate enough space to store the given number of submission queue entries.
+	// 计算提交队列条目所需的内存大小
 	sqEntriesSize := uint64(numSqEntries * uint32((*linux.IOUringSqe)(nil).SizeBytes()))
 	sqEntriesSize = uint64(hostarch.Addr(sqEntriesSize).MustRoundUp())
+	// 分配内存用于存储提交队列条目
 	sqefr, err := mf.Allocate(sqEntriesSize, pgalloc.AllocOpts{Kind: usage.Anonymous, MemCgID: memCgID})
 	if err != nil {
 		return nil, linuxerr.ENOMEM
 	}
-
+	// 初始化 io_uring 文件描述符
 	iouringfd := &FileDescription{
 		mf: mf,
 		rbmf: ringsBufferFile{
@@ -149,8 +163,7 @@ func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, entries uint32, par
 		runC: make(chan struct{}, 1),
 	}
 
-	// iouringfd is always set up with read/write mode.
-	// See io_uring/io_uring.c:io_uring_install_fd().
+	// 初始化虚拟文件描述符，设置为读写模
 	if err := iouringfd.vfsfd.Init(iouringfd, uint32(linux.O_RDWR), vd.Mount(), vd.Dentry(), &vfs.FileDescriptionOptions{
 		UseDentryMetadata: true,
 		DenyPRead:         true,
@@ -159,19 +172,18 @@ func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, entries uint32, par
 	}); err != nil {
 		return nil, err
 	}
-
+	// 更新参数中的提交队列和完成队列大小
 	params.SqEntries = numSqEntries
 	params.CqEntries = numCqEntries
-
+	// 计算并设置提交队列数组的偏移量
 	arrayOffset := uint64(hostarch.Addr(ioRingsWithCqesSize))
 	arrayOffset, ok = hostarch.CacheLineRoundUp(arrayOffset)
 	if !ok {
 		return nil, linuxerr.EOVERFLOW
 	}
-
 	params.SqOff = linux.PreComputedIOSqRingOffsets()
 	params.SqOff.Array = uint32(arrayOffset)
-
+	// 计算并设置完成队列条目的偏移量
 	cqesOffset := uint64(hostarch.Addr((*linux.IORings)(nil).SizeBytes()))
 	cqesOffset, ok = hostarch.CacheLineRoundUp(cqesOffset)
 	if !ok {
@@ -180,22 +192,21 @@ func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, entries uint32, par
 
 	params.CqOff = linux.PreComputedIOCqRingOffsets()
 	params.CqOff.Cqes = uint32(cqesOffset)
-
-	// Set features supported by the current IO_URING implementation.
+	// 设置当前 IO_URING 实现支持的特性
 	params.Features = linux.IORING_FEAT_SINGLE_MMAP
 
-	// Map all shared buffers.
+	// 映射所有共享缓冲区
 	if err := iouringfd.mapSharedBuffers(); err != nil {
 		return nil, err
 	}
 
-	// Initialize IORings struct from params.
+	// 初始化 IORings 结构体s.
 	iouringfd.ioRings.SqRingMask = params.SqEntries - 1
 	iouringfd.ioRings.CqRingMask = params.CqEntries - 1
 	iouringfd.ioRings.SqRingEntries = params.SqEntries
 	iouringfd.ioRings.CqRingEntries = params.CqEntries
 
-	// Write IORings out to shared buffer.
+	// 将 IORings 结构体写入共享缓冲区
 	view, err := iouringfd.ioRingsBuf.view(iouringfd.ioRings.SizeBytes())
 	if err != nil {
 		return nil, err
@@ -208,7 +219,7 @@ func New(ctx context.Context, vfsObj *vfs.VirtualFilesystem, entries uint32, par
 	if _, err := iouringfd.ioRingsBuf.writeback(iouringfd.ioRings.SizeBytes()); err != nil {
 		return nil, err
 	}
-
+	// 返回新创建的 io_uring 文件描述符
 	return &iouringfd.vfsfd, nil
 }
 
