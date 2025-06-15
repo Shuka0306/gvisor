@@ -62,6 +62,7 @@ const (
 const (
 	IORING_OP_NOP   = 0
 	IORING_OP_READV = 1
+	IORING_OP_WRITEV = 2
 )
 
 // IORingIndex represents SQE array indexes.

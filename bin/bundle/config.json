@@ -1,0 +1,45 @@
+{
+    "ociVersion": "1.0.2-dev",
+    "process": {
+        "terminal": true,
+        "user": {
+            "uid": 0,
+            "gid": 0
+        },
+        "args": [
+            "/awesomeProject4"
+        ],
+        "env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TERM=xterm"
+        ],
+        "cwd": "/root"
+    },
+    "root": {
+        "path": ".",
+        "readonly": false
+    },
+    "hostname": "runsc",
+    "mounts": [
+        {
+            "destination": "/proc",
+            "type": "proc",
+            "source": "proc"
+        },
+        {
+            "destination": "/dev",
+            "type": "tmpfs",
+            "source": "tmpfs"
+        }
+    ],
+    "linux": {
+        "namespaces": [
+            {
+                "type": "pid"
+            },
+            {
+                "type": "network"
+            }
+        ]
+    }
+}

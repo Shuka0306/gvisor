@@ -474,6 +474,8 @@ func (fd *FileDescription) ProcessSubmission(t *kernel.Task, sqe *linux.IOUringS
 			// reads aren't failures.
 			cqeErr = nil
 		}
+	case linux.IORING_OP_WRITEV:
+		println("just println>>>>")
 	default: // Unsupported operation
 		retValue = -int32(linuxerr.EINVAL.Errno())
 	}
@@ -491,6 +493,8 @@ func (fd *FileDescription) ProcessSubmission(t *kernel.Task, sqe *linux.IOUringS
 
 // handleReadv handles IORING_OP_READV.
 func (fd *FileDescription) handleReadv(t *kernel.Task, sqe *linux.IOUringSqe, flags uint32) (int32, error) {
+	//调用了Readv系统调用
+	println("readv ciallo~~~~~~~~~~~~~~~~~~")
 	// Check that a file descriptor is valid.
 	if sqe.Fd < 0 {
 		return 0, linuxerr.EBADF

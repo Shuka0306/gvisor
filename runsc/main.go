@@ -28,5 +28,6 @@ import (
 var _ = version.Version()
 
 func main() {
+	println("Welcome to shuka gvisor")
 	cli.Main()
 }
